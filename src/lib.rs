@@ -315,7 +315,7 @@ where
     Timing: crate::Timing,
 {
     channel: Option<Channel<'d, Mode, Tx>>,
-    rmt_buffer: [PulseCode; BUFFER_SIZE],
+    rmt_buffer: &'d mut [PulseCode; BUFFER_SIZE],
     pulses: (PulseCode, PulseCode),
     _order: PhantomData<Order>,
     _timing: PhantomData<Timing>,
@@ -323,25 +323,25 @@ where
 }
 
 /// A [`RmtSmartLeds`] for 8-bit RGB colors, which is what most smart LEDs use.
-/// 
+///
 /// You still need to pick the `Order` of the three colors as well as the `Timing` and the `BUFFER_SIZE`.
 pub type Rgb8RmtSmartLeds<'d, const BUFFER_SIZE: usize, Mode, Order, Timing> =
     RmtSmartLeds<'d, BUFFER_SIZE, Mode, RGB8, Order, Timing>;
 
 /// A [`RmtSmartLeds`] for the common WS2812 integrated smart LEDs.
-/// 
+///
 /// You only need to pick the `BUFFER_SIZE` to use this.
 pub type Ws2812SmartLeds<'d, const BUFFER_SIZE: usize, Mode> =
     Rgb8RmtSmartLeds<'d, BUFFER_SIZE, Mode, color_order::Grb, Ws2812Timing>;
 
 /// A [`RmtSmartLeds`] for integrated SK8612 (etc.) smart LEDs with RGBW.
-/// 
+///
 /// You only need to pick the `BUFFER_SIZE` to use this.
 pub type Sk68xxRgbwSmartLeds<'d, const BUFFER_SIZE: usize, Mode> =
     RmtSmartLeds<'d, BUFFER_SIZE, Mode, RGBW<u8>, color_order::Rgbw, Sk68xxTiming>;
 
 /// A [`RmtSmartLeds`] for smart LEDs with a single (white) channel.
-/// 
+///
 /// You only need to pick the `BUFFER_SIZE` and `Timing` to use this.
 pub type WhiteSmartLeds<'d, const BUFFER_SIZE: usize, Mode, Timing> =
     RmtSmartLeds<'d, BUFFER_SIZE, Mode, White<u8>, color_order::SingleChannel, Timing>;
@@ -360,22 +360,6 @@ where
     ///
     /// If you want to reuse the channel afterwards, you can use [`esp_hal::rmt::ChannelCreator::reborrow`] to create a shorter-lived derived channel.
     ///
-    /// # Errors
-    ///
-    /// If any configuration issue with the RMT [`Channel`] occurs, the error will be returned.
-    pub fn new<Ch, P>(channel: Ch, pin: P) -> Result<Self, RmtError>
-    where
-        Ch: TxChannelCreator<'d, Mode>,
-        P: PeripheralOutput<'d>,
-    {
-        Self::new_with_memsize(channel, pin, 1)
-    }
-    /// Creates a new [`RmtSmartLeds`] that drives the provided output using the given RMT channel.
-    ///
-    /// Note that calling this function usually requires you to specify the desired buffer size, [`ColorOrder`] and [`Timing`]. See the struct documentation for details.
-    ///
-    /// If you want to reuse the channel afterwards, you can use [`esp_hal::rmt::ChannelCreator::reborrow`] to create a shorter-lived derived channel.
-    ///
     /// The `memsize` parameter determines how many RMT blocks this adapter will use.
     /// If you use any value other than 1, other RMT channels will not be available, as their memory blocks will be used up by this driver.
     /// However, this can allow you to control many more LEDs without issues.
@@ -383,7 +367,12 @@ where
     /// # Errors
     ///
     /// If any configuration issue with the RMT [`Channel`] occurs, the error will be returned.
-    pub fn new_with_memsize<Ch, P>(channel: Ch, pin: P, memsize: u8) -> Result<Self, RmtError>
+    pub fn new<Ch, P>(
+        channel: Ch,
+        pin: P,
+        memsize: u8,
+        rmt_buffer: &'d mut [PulseCode; BUFFER_SIZE],
+    ) -> Result<Self, RmtError>
     where
         Ch: TxChannelCreator<'d, Mode>,
         P: PeripheralOutput<'d>,
@@ -408,8 +397,6 @@ where
             Level::Low,
             ((Timing::TIME_0_LOW as u32 * src_clock) / 1000) as u16,
         );
-        let mut rmt_buffer = [zero_pulse; _];
-        rmt_buffer[BUFFER_SIZE - 1] = PulseCode::end_marker();
         Ok(Self {
             channel: Some(channel),
             rmt_buffer,
@@ -482,7 +469,7 @@ where
         // This is currently unavoidable since transmit consumes the channel on error.
         // This is a known design flaw in the current RMT API and will be fixed soon.
         // We should adjust our usage accordingly as soon as possible.
-        match channel.transmit(&self.rmt_buffer)?.wait() {
+        match channel.transmit(self.rmt_buffer)?.wait() {
             Ok(chan) => {
                 self.channel = Some(chan);
                 Ok(())
@@ -546,7 +533,7 @@ where
             self.channel
                 .as_mut()
                 .unwrap()
-                .transmit(&self.rmt_buffer)
+                .transmit(self.rmt_buffer)
                 .await?;
             Ok(())
         }
